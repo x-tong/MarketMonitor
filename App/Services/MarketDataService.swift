@@ -1,6 +1,36 @@
 import Foundation
 
-struct MarketDataService {
+struct MarketDataHTTPResponse: Sendable {
+    let data: Data
+    let statusCode: Int
+}
+
+protocol MarketDataProviding: Sendable {
+    func fetchQuote(for asset: Asset) async throws -> Quote
+}
+
+struct MarketDataService: MarketDataProviding {
+    typealias Loader = @Sendable (URLRequest) async throws -> MarketDataHTTPResponse
+
+    private let loader: Loader
+    private let now: @Sendable () -> Date
+
+    init(
+        loader: @escaping Loader = MarketDataService.liveLoader,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.loader = loader
+        self.now = now
+    }
+
+    private static func liveLoader(_ request: URLRequest) async throws -> MarketDataHTTPResponse {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        return MarketDataHTTPResponse(data: data, statusCode: httpResponse.statusCode)
+    }
+
     private struct ChartResponse: Decodable {
         let chart: Chart
         struct Chart: Decodable {
@@ -41,13 +71,13 @@ struct MarketDataService {
         var request = URLRequest(url: url)
         request.setValue("https://finance.qq.com/", forHTTPHeaderField: "Referer")
         request.setValue("MarketMonitor/1.0", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
+        let response = try await loader(request)
+        guard (200..<300).contains(response.statusCode) else {
             throw URLError(.badServerResponse)
         }
 
         // Company names use a legacy encoding, while all price fields and separators are ASCII.
-        let payload = String(decoding: data, as: UTF8.self)
+        let payload = String(decoding: response.data, as: UTF8.self)
         guard let quoteStart = payload.firstIndex(of: "\""),
             let quoteEnd = payload.lastIndex(of: "\""), quoteStart < quoteEnd
         else {
@@ -58,7 +88,7 @@ struct MarketDataService {
         guard fields.count > 4,
             let price = Double(fields[3]),
             let previous = Double(fields[4]),
-            price > 0
+            price.isFinite, previous.isFinite, price > 0, previous >= 0
         else {
             throw URLError(.cannotParseResponse)
         }
@@ -66,7 +96,7 @@ struct MarketDataService {
         return Quote(
             symbol: asset.symbol, displayName: asset.displayName, kind: asset.kind,
             price: price, change: change, changePercent: previous == 0 ? 0 : change / previous * 100,
-            updatedAt: Date(), isDemo: false)
+            updatedAt: now(), isDemo: false, isStale: false)
     }
 
     private func fetchYahooQuote(for asset: Asset) async throws -> Quote {
@@ -78,23 +108,24 @@ struct MarketDataService {
         ]
         var request = URLRequest(url: components.url!)
         request.setValue("MarketMonitor/1.0", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
+        let response = try await loader(request)
+        guard (200..<300).contains(response.statusCode) else {
             throw URLError(.badServerResponse)
         }
-        let decoded = try JSONDecoder().decode(ChartResponse.self, from: data)
+        let decoded = try JSONDecoder().decode(ChartResponse.self, from: response.data)
         guard let result = decoded.chart.result?.first else { throw URLError(.cannotParseResponse) }
 
         let latest =
             result.meta.regularMarketPrice
             ?? result.indicators.quote.first?.close?.compactMap { $0 }.last
-        guard let price = latest else { throw URLError(.cannotParseResponse) }
+        guard let price = latest, price.isFinite, price > 0 else { throw URLError(.cannotParseResponse) }
         let previous = result.meta.previousClose ?? result.meta.chartPreviousClose ?? price
+        guard previous.isFinite, previous >= 0 else { throw URLError(.cannotParseResponse) }
         let change = price - previous
         return Quote(
             symbol: asset.symbol, displayName: asset.displayName, kind: asset.kind,
             price: price, change: change, changePercent: previous == 0 ? 0 : change / previous * 100,
-            updatedAt: Date(), isDemo: false)
+            updatedAt: now(), isDemo: false, isStale: false)
     }
 
     private func tencentMarketCode(for symbol: String) -> String? {

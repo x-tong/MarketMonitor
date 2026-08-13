@@ -7,17 +7,31 @@ final class MarketStore: ObservableObject {
     @Published private(set) var primarySymbol: String
     @Published private(set) var quotes: [String: Quote] = [:]
     @Published private(set) var isRefreshing = false
+    @Published private(set) var isAdding = false
     @Published private(set) var lastRefresh: Date?
     @Published private(set) var lastError: String?
+    @Published private(set) var addError: String?
 
-    private let service = MarketDataService()
-    private let defaultsKey = "market-monitor.assets"
-    private let primaryKey = "market-monitor.primary-symbol"
+    static let assetsDefaultsKey = "market-monitor.assets"
+    static let primaryDefaultsKey = "market-monitor.primary-symbol"
+
+    private let service: any MarketDataProviding
+    private let defaults: UserDefaults
+    private let now: () -> Date
     private var refreshTask: Task<Void, Never>?
 
-    init() {
+    init(
+        service: any MarketDataProviding = MarketDataService(),
+        defaults: UserDefaults = .standard,
+        now: @escaping () -> Date = Date.init,
+        startsAutomaticRefresh: Bool = true
+    ) {
+        self.service = service
+        self.defaults = defaults
+        self.now = now
+
         let loadedAssets: [Asset]
-        if let data = UserDefaults.standard.data(forKey: defaultsKey),
+        if let data = defaults.data(forKey: Self.assetsDefaultsKey),
             let saved = try? JSONDecoder().decode([Asset].self, from: data), !saved.isEmpty
         {
             loadedAssets = saved
@@ -25,22 +39,25 @@ final class MarketStore: ObservableObject {
             loadedAssets = Asset.defaults
         }
         assets = loadedAssets
-        let savedPrimary = UserDefaults.standard.string(forKey: primaryKey)
+        let savedPrimary = defaults.string(forKey: Self.primaryDefaultsKey)
         primarySymbol =
             savedPrimary.flatMap { candidate in
                 loadedAssets.contains { $0.symbol == candidate } ? candidate : nil
             } ?? loadedAssets.first?.symbol ?? ""
-        for asset in loadedAssets { quotes[asset.symbol] = .demo(for: asset) }
-        refreshTask = Task { [weak self] in
-            guard let self else { return }
-            await self.refresh()
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(30))
-                } catch {
-                    break
+        let initialDate = now()
+        for asset in loadedAssets { quotes[asset.symbol] = .demo(for: asset, updatedAt: initialDate) }
+        if startsAutomaticRefresh {
+            refreshTask = Task { [weak self] in
+                guard let self else { return }
+                await self.refresh()
+                while !Task.isCancelled {
+                    do {
+                        try await Task.sleep(for: .seconds(30))
+                    } catch {
+                        break
+                    }
+                    if !Task.isCancelled { await self.refresh() }
                 }
-                if !Task.isCancelled { await self.refresh() }
             }
         }
     }
@@ -73,30 +90,69 @@ final class MarketStore: ObservableObject {
         isRefreshing = true
         lastError = nil
         var failed = false
+        var succeeded = false
+        let service = service
         await withTaskGroup(of: (String, Quote?).self) { group in
             for asset in assets {
                 group.addTask {
-                    do { return (asset.symbol, try await self.service.fetchQuote(for: asset)) } catch {
+                    do { return (asset.symbol, try await service.fetchQuote(for: asset)) } catch {
                         return (asset.symbol, nil)
                     }
                 }
             }
             for await (symbol, quote) in group {
-                if let quote { quotes[symbol] = quote } else { failed = true }
+                guard let asset = assets.first(where: { $0.symbol == symbol }) else { continue }
+                if let quote, isValidLiveQuote(quote, for: asset) {
+                    quotes[symbol] = quote
+                    succeeded = true
+                } else {
+                    if let previous = quotes[symbol] { quotes[symbol] = previous.markingStale() }
+                    failed = true
+                }
             }
         }
         isRefreshing = false
-        lastRefresh = Date()
-        if failed { lastError = "部分行情暂时不可用，已保留上次数据" }
+        if succeeded { lastRefresh = now() }
+        if failed { lastError = "部分行情暂时不可用，已将上次数据标记为过期" }
     }
 
-    func add(symbol: String) {
-        guard let asset = Asset.from(symbol: symbol), !assets.contains(asset) else { return }
+    @discardableResult
+    func add(symbol: String) async -> Bool {
+        guard !isAdding else { return false }
+        guard let asset = Asset.from(symbol: symbol) else {
+            addError = "请输入有效的行情代码"
+            return false
+        }
+        guard !assets.contains(asset) else {
+            addError = "该行情已在列表中"
+            return false
+        }
+
+        isAdding = true
+        addError = nil
+        defer { isAdding = false }
+
+        let quote: Quote
+        do {
+            quote = try await service.fetchQuote(for: asset)
+        } catch {
+            addError = "无法验证该代码，请检查代码或稍后重试"
+            return false
+        }
+        guard isValidLiveQuote(quote, for: asset) else {
+            addError = "行情服务未返回有效数据"
+            return false
+        }
+        guard !assets.contains(asset) else {
+            addError = "该行情已在列表中"
+            return false
+        }
+
         assets.append(asset)
-        quotes[asset.symbol] = .demo(for: asset)
+        quotes[asset.symbol] = quote
         if primarySymbol.isEmpty { primarySymbol = asset.symbol }
         persist()
-        Task { await refresh() }
+        return true
     }
 
     func remove(_ asset: Asset) {
@@ -108,7 +164,18 @@ final class MarketStore: ObservableObject {
     }
 
     private func persist() {
-        if let data = try? JSONEncoder().encode(assets) { UserDefaults.standard.set(data, forKey: defaultsKey) }
-        UserDefaults.standard.set(primarySymbol, forKey: primaryKey)
+        if let data = try? JSONEncoder().encode(assets) { defaults.set(data, forKey: Self.assetsDefaultsKey) }
+        defaults.set(primarySymbol, forKey: Self.primaryDefaultsKey)
+    }
+
+    private func isValidLiveQuote(_ quote: Quote, for asset: Asset) -> Bool {
+        quote.symbol == asset.symbol
+            && quote.kind == asset.kind
+            && quote.price.isFinite
+            && quote.price > 0
+            && quote.change.isFinite
+            && quote.changePercent.isFinite
+            && !quote.isDemo
+            && !quote.isStale
     }
 }

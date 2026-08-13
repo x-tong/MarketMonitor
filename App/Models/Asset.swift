@@ -1,6 +1,6 @@
 import Foundation
 
-struct Asset: Identifiable, Codable, Hashable {
+struct Asset: Identifiable, Codable, Hashable, Sendable {
     let symbol: String
     let displayName: String
     let kind: AssetKind
@@ -10,7 +10,7 @@ struct Asset: Identifiable, Codable, Hashable {
         symbol.replacingOccurrences(of: "-USD", with: "")
     }
 
-    enum AssetKind: String, Codable {
+    enum AssetKind: String, Codable, Sendable {
         case stock
         case crypto
     }

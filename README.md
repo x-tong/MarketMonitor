@@ -2,6 +2,11 @@
 
 MarketMonitor is a lightweight macOS menu bar app for watching stocks and cryptocurrencies. It supports US stocks, mainland China A-shares, Hong Kong stocks, and common USD crypto pairs.
 
+It is designed as a personal, open-source utility for checking a small watchlist at work without keeping a full
+brokerage application open. The project prioritizes trustworthy quote state, low-interruption alerts, local data,
+and low maintenance cost over trading, charting, or news features. See [ROADMAP.md](ROADMAP.md) for milestones and
+explicit non-goals.
+
 ## Requirements
 
 - macOS 13 or newer
@@ -56,6 +61,9 @@ Six-digit mainland codes are inferred from their leading digit. Use an explicit 
 - A-share and Hong Kong quotes prefer Tencent's public quote endpoint and fall back to Yahoo Finance.
 - US stock and cryptocurrency quotes use Yahoo Finance.
 - Quotes refresh every 30 seconds. This is polling, not an exchange-grade real-time feed.
+- Demo and stale quotes are labeled in both the menu bar and quote list. A failed refresh preserves the
+  previous quote and timestamp, and marks that quote as stale.
+- New symbols are saved only after a market-data provider returns a valid live quote.
 
 This project is currently an alpha suitable for local evaluation. The public endpoints can rate-limit or change without notice. The generated bundle is a local debug artifact; it is not Developer ID signed, hardened, notarized, or ready for public distribution.
 

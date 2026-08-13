@@ -79,16 +79,32 @@ struct MarketPopoverView: View {
     }
 
     private var addRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "plus.circle")
-                .foregroundStyle(.secondary)
-            TextField("添加代码，如 600519 / 0700.HK / BTC", text: $symbolInput)
-                .textFieldStyle(.plain)
-                .onSubmit(addAsset)
-            Button("添加", action: addAsset)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Image(systemName: "plus.circle")
+                    .foregroundStyle(.secondary)
+                TextField("添加代码，如 600519 / 0700.HK / BTC", text: $symbolInput)
+                    .textFieldStyle(.plain)
+                    .onSubmit(addAsset)
+                    .disabled(store.isAdding)
+                Button(action: addAsset) {
+                    if store.isAdding {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text("添加")
+                    }
+                }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .disabled(symbolInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .frame(minWidth: 48)
+                .disabled(store.isAdding || symbolInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            if let error = store.addError {
+                Label(error, systemImage: "exclamationmark.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -116,8 +132,12 @@ struct MarketPopoverView: View {
     }
 
     private func addAsset() {
-        store.add(symbol: symbolInput)
-        symbolInput = ""
+        let submittedSymbol = symbolInput
+        Task {
+            if await store.add(symbol: submittedSymbol) {
+                symbolInput = ""
+            }
+        }
     }
 
     private var primaryDisplaySymbol: String {
@@ -159,6 +179,9 @@ private struct QuoteRow: View {
                     )
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(quote.isPositive ? .green : .red)
+                    Text(statusText(for: quote))
+                        .font(.system(size: 9))
+                        .foregroundStyle(statusColor(for: quote))
                 }
             } else {
                 ProgressView().controlSize(.small)
@@ -184,5 +207,17 @@ private struct QuoteRow: View {
                 .disabled(isPrimary())
             Button("移除") { onRemove() }
         }
+    }
+
+    private func statusText(for quote: Quote) -> String {
+        let time = quote.updatedAt.formatted(date: .omitted, time: .shortened)
+        if quote.isDemo && quote.isStale { return "模拟 · 已过期 · \(time)" }
+        if quote.isDemo { return "模拟 · \(time)" }
+        if quote.isStale { return "已过期 · \(time)" }
+        return "更新于 \(time)"
+    }
+
+    private func statusColor(for quote: Quote) -> Color {
+        quote.isDemo || quote.isStale ? .orange : .secondary
     }
 }
