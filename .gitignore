@@ -1,0 +1,20 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# App bundles and archives
+dist/
+*.dSYM/
+*.xcarchive/
+
+# Xcode and macOS
+DerivedData/
+xcuserdata/
+*.xcuserstate
+.DS_Store
+
+# Local agent and editor state
+.agents/
+.idea/
+.vscode/
+*.swp

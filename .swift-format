@@ -1,0 +1,15 @@
+{
+  "indentation": {
+    "spaces": 4
+  },
+  "lineLength": 120,
+  "maximumBlankLines": 1,
+  "respectsExistingLineBreaks": true,
+  "rules": {
+    "AllPublicDeclarationsHaveDocumentation": false,
+    "IdentifiersMustBeASCII": false,
+    "NeverForceUnwrap": false,
+    "OrderedImports": true
+  },
+  "version": 1
+}
