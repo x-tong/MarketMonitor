@@ -29,6 +29,31 @@ Useful variants:
 ./script/build_and_run.sh --debug
 ```
 
+## Install A Release
+
+GitHub Releases provide a `.dmg` and `.zip` built for Apple Silicon (`arm64`). The
+release artifacts are not Developer ID signed or notarized, so
+macOS may show a security warning the first time the app is opened.
+
+1. Download the `.dmg` from the repository's Releases page.
+2. Open it and drag `MarketMonitor.app` to `Applications`.
+3. On the first launch, Control-click the app in Finder and choose **Open**, then confirm **Open**.
+4. If macOS still blocks it, open **System Settings > Privacy & Security**, find the blocked app message, and choose **Open Anyway**.
+
+The app is menu-bar-only and will not appear in the Dock. The current release requires
+an Apple Silicon Mac running macOS 13 or newer and internet access for live quotes. The
+first alert trigger asks for notification permission.
+
+Maintainers can build the same artifacts locally with:
+
+```bash
+./script/package_release.sh 0.2.0
+```
+
+The script writes ignored artifacts to `dist/releases/` and intentionally uses an
+ad-hoc signature. This is a low-cost distribution path for a personal open-source
+project; it does not provide the trust guarantees of Developer ID signing and notarization.
+
 ## Development
 
 Run the repository quality gate before committing:
@@ -64,8 +89,10 @@ Six-digit mainland codes are inferred from their leading digit. Use an explicit 
 - Demo and stale quotes are labeled in both the menu bar and quote list. A failed refresh preserves the
   previous quote and timestamp, and marks that quote as stale.
 - New symbols are saved only after a market-data provider returns a valid live quote.
+- Price and percentage alerts support per-rule cooldowns, condition re-arming, quiet hours, and a persisted global pause.
+  Notifications are emitted only from validated, non-demo, non-stale quotes after macOS notification permission is granted.
 
-This project is currently an alpha suitable for local evaluation. The public endpoints can rate-limit or change without notice. The generated bundle is a local debug artifact; it is not Developer ID signed, hardened, notarized, or ready for public distribution.
+This project is currently an alpha suitable for local evaluation and informal release testing. The public endpoints can rate-limit or change without notice. Release artifacts are ad-hoc signed and not notarized.
 
 ## Repository Layout
 

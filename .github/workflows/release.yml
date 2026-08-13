@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: macos-14
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Package release
+        env:
+          MARKET_MONITOR_VERSION: ${{ github.ref_name }}
+        run: |
+          version="${MARKET_MONITOR_VERSION#v}"
+          ./script/package_release.sh "$version"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/releases/MarketMonitor-*.dmg
+            dist/releases/MarketMonitor-*.zip

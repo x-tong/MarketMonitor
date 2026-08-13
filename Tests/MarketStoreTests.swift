@@ -84,6 +84,36 @@ struct MarketStoreTests {
         #expect(store.addError == "行情服务未返回有效数据")
     }
 
+    @Test("Alert rules persist and notify only on trusted refreshes")
+    func alertRulesPersistAndNotify() async throws {
+        let quoteDate = Date(timeIntervalSince1970: 1_000)
+        let provider = ControlledMarketDataProvider(quoteDate: quoteDate)
+        let notifications = RecordingNotificationService()
+        let defaults = try makeDefaults()
+        var currentDate = Date(timeIntervalSince1970: 2_000)
+        let store = MarketStore(
+            service: provider,
+            defaults: defaults,
+            now: { currentDate },
+            notificationService: notifications,
+            startsAutomaticRefresh: false)
+        let asset = try #require(store.assets.first(where: { $0.symbol == "AAPL" }))
+        #expect(store.addAlertRule(asset: asset, condition: .priceAbove, threshold: 100, cooldown: 0))
+
+        await store.refresh()
+        #expect(notifications.count == 1)
+        #expect(store.alertRules.first?.lastTriggeredAt == currentDate)
+
+        currentDate = currentDate.addingTimeInterval(60)
+        await store.refresh()
+        #expect(notifications.count == 1)
+
+        let savedData = try #require(defaults.data(forKey: MarketStore.alertRulesDefaultsKey))
+        let savedRules = try JSONDecoder().decode([AlertRule].self, from: savedData)
+        #expect(savedRules.count == 1)
+        #expect(savedRules[0].assetSymbol == "AAPL")
+    }
+
     private func makeDefaults() throws -> UserDefaults {
         let suiteName = "MarketStoreTests.\(UUID().uuidString)"
         return try #require(UserDefaults(suiteName: suiteName))
@@ -121,5 +151,16 @@ private actor ControlledMarketDataProvider: MarketDataProviding {
             updatedAt: quoteDate,
             isDemo: false,
             isStale: false)
+    }
+}
+
+@MainActor
+private final class RecordingNotificationService: AlertNotificationSending {
+    private(set) var count = 0
+
+    func requestAuthorization() async {}
+
+    func send(title: String, body: String) async {
+        count += 1
     }
 }
