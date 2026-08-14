@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct MarketPopoverView: View {
@@ -15,20 +16,33 @@ struct MarketPopoverView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    quoteList
-                    Divider()
-                    alertsSection
-                }
-            }
-            .frame(height: scrollingContentHeight)
+            marketContent
             Divider()
             addRow
             footer
         }
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    @ViewBuilder
+    private var marketContent: some View {
+        if contentRequiresScrolling {
+            ScrollView(.vertical, showsIndicators: false) {
+                marketContentBody
+            }
+            .frame(height: maximumContentHeight)
+        } else {
+            marketContentBody
+        }
+    }
+
+    private var marketContentBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            quoteList
+            Divider()
+            alertsSection
+        }
     }
 
     private var header: some View {
@@ -38,8 +52,8 @@ struct MarketPopoverView: View {
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                 Text(
                     store.lastRefresh.map {
-                        "状态栏 · \(primaryDisplaySymbol) · \($0.formatted(date: .omitted, time: .shortened))"
-                    } ?? "状态栏 · \(primaryDisplaySymbol)"
+                        "更新于 \($0.formatted(date: .omitted, time: .shortened))"
+                    } ?? "正在获取最新行情"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -58,10 +72,10 @@ struct MarketPopoverView: View {
                     }
                 }
             } label: {
-                Label("状态栏：\(primaryDisplaySymbol)", systemImage: "menubar.rectangle")
+                Label("菜单栏：\(primaryDisplayText)", systemImage: "menubar.rectangle")
             }
             .menuStyle(.borderlessButton)
-            .help("选择状态栏显示的行情")
+            .help("选择菜单栏显示的行情")
             Button {
                 Task { await store.refresh() }
             } label: {
@@ -91,10 +105,6 @@ struct MarketPopoverView: View {
                         displayDate: store.displayDate
                     ) {
                         store.remove(asset)
-                    } onSetPrimary: {
-                        store.setPrimary(asset)
-                    } isPrimary: {
-                        store.isPrimary(asset)
                     }
                     if asset.id != store.assets.last?.id { Divider().padding(.leading, 62) }
                 }
@@ -158,10 +168,14 @@ struct MarketPopoverView: View {
                     .foregroundStyle(.orange)
             }
             if let error = store.notificationError {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    notificationPermissionAction
+                }
             }
             if let error = store.alertRuleError {
                 Label(error, systemImage: "exclamationmark.circle")
@@ -184,7 +198,7 @@ struct MarketPopoverView: View {
         .padding(.vertical, 12)
         .task {
             if alertAssetSymbol.isEmpty { alertAssetSymbol = store.assets.first?.symbol ?? "" }
-            await store.refreshNotificationAuthorization()
+            await store.requestNotificationAuthorization()
         }
         .onChange(of: store.assets) { assets in
             if !assets.contains(where: { $0.symbol == alertAssetSymbol }) {
@@ -428,16 +442,61 @@ struct MarketPopoverView: View {
         return hour * 60 + minute
     }
 
+    @ViewBuilder
+    private var notificationPermissionAction: some View {
+        switch store.notificationAuthorization {
+        case .denied:
+            Button(action: openNotificationSettings) {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(.borderless)
+            .help("打开系统通知设置")
+        case .notDetermined:
+            Button {
+                Task { await store.requestNotificationAuthorization() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .help("重新请求通知权限")
+        case .unknown, .authorized:
+            EmptyView()
+        }
+    }
+
+    private func openNotificationSettings() {
+        guard
+            let url = URL(
+                string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     private var primaryDisplaySymbol: String {
         store.assets.first(where: { $0.symbol == store.primarySymbol })?.displaySymbol
             ?? (store.primarySymbol.isEmpty ? "未选择" : store.primarySymbol)
     }
 
-    private var scrollingContentHeight: CGFloat {
-        let quoteHeight = store.assets.isEmpty ? 64 : CGFloat(store.assets.count * 55 + 8)
-        let alertHeight = CGFloat(store.alertRules.count * 42 + 154)
-        return min(max(quoteHeight + alertHeight, 250), 460)
+    private var primaryDisplayText: String {
+        guard let quote = store.quotes[store.primarySymbol] else { return primaryDisplaySymbol }
+        return "\(primaryDisplaySymbol) \(MarketFormatters.price(quote.price, kind: quote.kind))"
     }
+
+    private var estimatedContentHeight: CGFloat {
+        let quoteHeight = store.assets.isEmpty ? 64 : CGFloat(store.assets.count * 55 + 8)
+        var alertHeight = CGFloat(store.alertRules.count * 42 + 154)
+        if store.monitoringPaused { alertHeight += 18 }
+        if store.notificationError != nil { alertHeight += 32 }
+        if store.alertRuleError != nil { alertHeight += 28 }
+        if quietHoursError != nil { alertHeight += 18 }
+        return quoteHeight + alertHeight
+    }
+
+    private var contentRequiresScrolling: Bool {
+        estimatedContentHeight > maximumContentHeight
+    }
+
+    private let maximumContentHeight: CGFloat = 520
 }
 
 private struct QuoteRow: View {
@@ -445,8 +504,6 @@ private struct QuoteRow: View {
     let quote: Quote?
     let displayDate: Date
     let onRemove: () -> Void
-    let onSetPrimary: () -> Void
-    let isPrimary: () -> Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -471,12 +528,6 @@ private struct QuoteRow: View {
             } else {
                 ProgressView().controlSize(.small)
             }
-            Button(action: onSetPrimary) {
-                Image(systemName: isPrimary() ? "pin.fill" : "pin")
-                    .foregroundStyle(isPrimary() ? .blue : .secondary)
-            }
-            .buttonStyle(.borderless)
-            .help(isPrimary() ? "当前状态栏行情" : "设为状态栏行情")
             Button(action: onRemove) {
                 Image(systemName: "minus.circle")
                     .foregroundStyle(.secondary)
@@ -486,10 +537,7 @@ private struct QuoteRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .background(isPrimary() ? Color.accentColor.opacity(0.08) : .clear)
         .contextMenu {
-            Button(isPrimary() ? "当前状态栏行情" : "设为状态栏行情", action: onSetPrimary)
-                .disabled(isPrimary())
             Button("移除") { onRemove() }
         }
     }

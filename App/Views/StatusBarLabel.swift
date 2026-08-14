@@ -12,22 +12,20 @@ struct StatusBarLabel: View {
         HStack(spacing: 5) {
             Image(systemName: "chart.line.uptrend.xyaxis")
             if let quote = store.primaryQuote {
-                Text(Asset(symbol: quote.symbol, displayName: quote.displayName, kind: quote.kind).displaySymbol)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                Text(MarketFormatters.price(quote.price, kind: quote.kind))
+                Text(displayText(for: quote, at: date))
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
-                Image(systemName: quote.isPositive ? "arrow.up.right" : "arrow.down.right")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(quote.isPositive ? .green : .red)
-                if !quote.isAlertEligible(at: date) {
-                    Text(QuoteStatusFormatter.shortText(for: quote, at: date))
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.orange)
-                }
             } else {
                 Text("Market")
                     .font(.system(size: 12, weight: .semibold))
             }
         }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func displayText(for quote: Quote, at date: Date) -> String {
+        let asset = Asset(symbol: quote.symbol, displayName: quote.displayName, kind: quote.kind)
+        let quoteText = "\(asset.displaySymbol) \(MarketFormatters.price(quote.price, kind: quote.kind))"
+        guard let statusText = QuoteStatusFormatter.menuBarText(for: quote, at: date) else { return quoteText }
+        return "\(quoteText) \(statusText)"
     }
 }

@@ -323,6 +323,22 @@ struct MarketStoreTests {
         #expect(store.alertRules.first?.lastTriggeredAt == nil)
     }
 
+    @Test("Opening notification controls requests undetermined permission once")
+    func openingNotificationControlsRequestsPermissionOnce() async throws {
+        let notifications = RecordingNotificationService()
+        let store = MarketStore(
+            defaults: try makeDefaults(),
+            notificationService: notifications,
+            startsAutomaticRefresh: false)
+
+        await store.requestNotificationAuthorization()
+        await store.requestNotificationAuthorization()
+
+        #expect(notifications.authorizationRequestCount == 1)
+        #expect(store.notificationAuthorization == .authorized)
+        #expect(store.notificationError == nil)
+    }
+
     @Test("Equal quiet-hour boundaries are rejected")
     func rejectsEqualQuietHourBoundaries() async throws {
         let store = MarketStore(defaults: try makeDefaults(), startsAutomaticRefresh: false)

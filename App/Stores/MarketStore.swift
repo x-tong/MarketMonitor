@@ -277,8 +277,8 @@ final class MarketStore: ObservableObject {
         return true
     }
 
-    func refreshNotificationAuthorization() async {
-        await updateNotificationAuthorization(requestIfNeeded: false)
+    func requestNotificationAuthorization() async {
+        await updateNotificationAuthorization(requestIfNeeded: true)
     }
 
     func removeAlertRule(_ rule: AlertRule) {

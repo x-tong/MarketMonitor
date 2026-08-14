@@ -41,13 +41,14 @@ macOS may show a security warning the first time the app is opened.
 4. If macOS still blocks it, open **System Settings > Privacy & Security**, find the blocked app message, and choose **Open Anyway**.
 
 The app is menu-bar-only and will not appear in the Dock. The current release requires
-an Apple Silicon Mac running macOS 13 or newer and internet access for live quotes. The
-creating the first alert rule asks for notification permission.
+an Apple Silicon Mac running macOS 13 or newer and internet access for live quotes. Opening
+the menu bar panel for the first time asks for notification permission. If permission was
+previously denied, use the settings button beside the warning to open macOS notification settings.
 
 Maintainers can build the same artifacts locally with:
 
 ```bash
-./script/package_release.sh 0.2.0
+./script/package_release.sh 0.2.1
 ```
 
 The script writes ignored artifacts to `dist/releases/` and intentionally uses an
@@ -87,9 +88,9 @@ Six-digit mainland codes are inferred from their leading digit. Use an explicit 
 - US stock and cryptocurrency quotes use Yahoo Finance.
 - Quotes refresh every 30 seconds, and each provider request times out after 10 seconds. This is polling, not an exchange-grade real-time feed.
 - To keep polling and menu rendering bounded, a watchlist can contain up to 50 assets and the app stores up to 200 alert rules. At most six quote requests run concurrently.
-- Provider timestamps are preserved. Trading, pre-market, post-market, closed, delayed, unknown, demo, and stale
-  states are labeled in the menu bar or quote list when the provider exposes enough information. A failed refresh
-  preserves the previous quote and timestamp, and marks that quote as stale.
+- Provider timestamps are preserved. Known trading states appear in the quote list, while the menu bar reserves
+  status text for demo, delayed, or stale data. Missing session metadata does not add a persistent status label.
+  A failed refresh preserves the previous quote and timestamp, and marks that quote as stale.
 - New symbols are saved only after a market-data provider returns a structurally valid quote, including when the
   market is closed.
 - Price and percentage alerts support per-rule cooldowns, condition re-arming, quiet hours, and a persisted global pause.

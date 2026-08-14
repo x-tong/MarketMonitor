@@ -11,7 +11,7 @@ enum QuoteStatusFormatter {
 
         var labels: [String] = []
         if quote.isDelayed { labels.append("延迟 \(quote.delayMinutes) 分钟") }
-        labels.append(quote.marketState.title)
+        if quote.marketState != .unknown { labels.append(quote.marketState.title) }
         return labels
     }
 
@@ -28,5 +28,13 @@ enum QuoteStatusFormatter {
         if quote.isStale || (quote.marketState == .regular && !quote.isFresh(at: date)) { return "过期" }
         if quote.isDelayed { return "延迟\(quote.delayMinutes)m" }
         return quote.marketState.title
+    }
+
+    static func menuBarText(for quote: Quote, at date: Date) -> String? {
+        if quote.isDemo && quote.isStale { return "模拟/过期" }
+        if quote.isDemo { return "模拟" }
+        if quote.isStale || (quote.marketState == .regular && !quote.isFresh(at: date)) { return "过期" }
+        if quote.isDelayed { return "延迟\(quote.delayMinutes)m" }
+        return nil
     }
 }

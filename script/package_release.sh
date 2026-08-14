@@ -4,7 +4,7 @@ set -euo pipefail
 APP_NAME="MarketMonitor"
 BUNDLE_ID="com.marketmonitor.app"
 MIN_SYSTEM_VERSION="13.0"
-DEFAULT_VERSION="0.2.0"
+DEFAULT_VERSION="0.2.1"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-${MARKET_MONITOR_VERSION:-$DEFAULT_VERSION}}"

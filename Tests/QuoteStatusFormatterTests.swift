@@ -25,9 +25,38 @@ struct QuoteStatusFormatterTests {
         #expect(QuoteStatusFormatter.shortText(for: closed, at: date) == "休市")
     }
 
+    @Test("Unknown session metadata does not add a visible status label")
+    func unknownSessionMetadataIsOmitted() {
+        let date = Date(timeIntervalSince1970: 2_000)
+        let unknown = quote(updatedAt: date, marketState: .unknown)
+
+        #expect(QuoteStatusFormatter.labels(for: unknown, at: date).isEmpty)
+    }
+
+    @Test("Menu bar omits session metadata that does not affect price trust")
+    func menuBarOmitsSessionMetadata() {
+        let date = Date(timeIntervalSince1970: 2_000)
+        let unknown = quote(updatedAt: date, marketState: .unknown)
+        let closed = quote(updatedAt: date.addingTimeInterval(-10_000), marketState: .closed)
+
+        #expect(QuoteStatusFormatter.menuBarText(for: unknown, at: date) == nil)
+        #expect(QuoteStatusFormatter.menuBarText(for: closed, at: date) == nil)
+    }
+
+    @Test("Menu bar retains data trust warnings")
+    func menuBarRetainsTrustWarnings() {
+        let date = Date(timeIntervalSince1970: 2_000)
+        let stale = quote(updatedAt: date, isStale: true, marketState: .unknown)
+        let delayed = quote(updatedAt: date, delayMinutes: 15, marketState: .unknown)
+
+        #expect(QuoteStatusFormatter.menuBarText(for: stale, at: date) == "过期")
+        #expect(QuoteStatusFormatter.menuBarText(for: delayed, at: date) == "延迟15m")
+    }
+
     private func quote(
         updatedAt: Date,
         isStale: Bool = false,
+        delayMinutes: Int = 0,
         marketState: MarketSessionState
     ) -> Quote {
         Quote(
@@ -40,6 +69,7 @@ struct QuoteStatusFormatterTests {
             updatedAt: updatedAt,
             isDemo: false,
             isStale: isStale,
-            marketState: marketState)
+            marketState: marketState,
+            delayMinutes: delayMinutes)
     }
 }
