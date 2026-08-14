@@ -11,12 +11,12 @@ permissions:
 
 jobs:
   check:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 15
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Show Swift toolchain
         run: swift --version
