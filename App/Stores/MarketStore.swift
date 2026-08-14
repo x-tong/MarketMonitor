@@ -16,7 +16,14 @@ final class MarketStore: ObservableObject {
     @Published private(set) var quietHoursEnabled: Bool
     @Published private(set) var quietHoursStartMinute: Int
     @Published private(set) var quietHoursEndMinute: Int
+    @Published private(set) var notificationAuthorization: AlertNotificationAuthorizationStatus = .unknown
+    @Published private(set) var notificationError: String?
+    @Published private(set) var alertRuleError: String?
+    @Published private(set) var displayDate: Date
 
+    static let maximumAssets = 50
+    static let maximumAlertRules = 200
+    static let maximumConcurrentRequests = 6
     static let assetsDefaultsKey = "market-monitor.assets"
     static let primaryDefaultsKey = "market-monitor.primary-symbol"
     static let alertRulesDefaultsKey = "market-monitor.alert-rules"
@@ -29,26 +36,42 @@ final class MarketStore: ObservableObject {
     private let defaults: UserDefaults
     private let now: () -> Date
     private let notificationService: any AlertNotificationSending
+    private let refreshInterval: Duration
     private var refreshTask: Task<Void, Never>?
-    private var notificationAuthorizationRequested = false
+
+    private struct PendingAlert {
+        let ruleID: UUID
+        let triggeredRule: AlertRule
+        let title: String
+        let body: String
+    }
 
     init(
         service: any MarketDataProviding = MarketDataService(),
         defaults: UserDefaults = .standard,
         now: @escaping () -> Date = Date.init,
         notificationService: any AlertNotificationSending = UserNotificationService(),
+        refreshInterval: Duration = .seconds(30),
         startsAutomaticRefresh: Bool = true
     ) {
         self.service = service
         self.defaults = defaults
         self.now = now
         self.notificationService = notificationService
+        self.refreshInterval = refreshInterval
 
         let loadedAssets: [Asset]
         if let data = defaults.data(forKey: Self.assetsDefaultsKey),
-            let saved = try? JSONDecoder().decode([Asset].self, from: data), !saved.isEmpty
+            let saved = try? JSONDecoder().decode([Asset].self, from: data)
         {
-            loadedAssets = saved
+            var seenSymbols = Set<String>()
+            var boundedAssets: [Asset] = []
+            for asset in saved {
+                guard asset.isValidPersistedAsset, seenSymbols.insert(asset.symbol).inserted else { continue }
+                boundedAssets.append(asset)
+                if boundedAssets.count == Self.maximumAssets { break }
+            }
+            loadedAssets = boundedAssets
         } else {
             loadedAssets = Asset.defaults
         }
@@ -62,10 +85,17 @@ final class MarketStore: ObservableObject {
             (try? defaults.data(forKey: Self.alertRulesDefaultsKey).flatMap {
                 try JSONDecoder().decode([AlertRule].self, from: $0)
             }) ?? nil
-        alertRules =
-            savedRules?.filter { rule in
-                rule.isValid && loadedAssets.contains { $0.symbol == rule.assetSymbol }
-            } ?? []
+        var seenRuleIDs = Set<UUID>()
+        var boundedRules: [AlertRule] = []
+        for rule in savedRules ?? [] {
+            guard rule.isValid,
+                loadedAssets.contains(where: { $0.symbol == rule.assetSymbol }),
+                seenRuleIDs.insert(rule.id).inserted
+            else { continue }
+            boundedRules.append(rule)
+            if boundedRules.count == Self.maximumAlertRules { break }
+        }
+        alertRules = boundedRules
         monitoringPaused = defaults.bool(forKey: Self.monitoringPausedDefaultsKey)
         quietHoursEnabled = defaults.bool(forKey: Self.quietHoursEnabledDefaultsKey)
         quietHoursStartMinute = min(
@@ -73,18 +103,18 @@ final class MarketStore: ObservableObject {
         quietHoursEndMinute = min(
             max(defaults.object(forKey: Self.quietHoursEndDefaultsKey) as? Int ?? 7 * 60, 0), 1_439)
         let initialDate = now()
+        displayDate = initialDate
         for asset in loadedAssets { quotes[asset.symbol] = .demo(for: asset, updatedAt: initialDate) }
         if startsAutomaticRefresh {
-            refreshTask = Task { [weak self] in
-                guard let self else { return }
-                await self.refresh()
+            refreshTask = Task { [weak self, refreshInterval] in
+                await self?.refresh()
                 while !Task.isCancelled {
                     do {
-                        try await Task.sleep(for: .seconds(30))
+                        try await Task.sleep(for: refreshInterval)
                     } catch {
                         break
                     }
-                    if !Task.isCancelled { await self.refresh() }
+                    if !Task.isCancelled { await self?.refresh() }
                 }
             }
         }
@@ -115,42 +145,49 @@ final class MarketStore: ObservableObject {
 
     func refresh() async {
         guard !isRefreshing else { return }
+        displayDate = now()
         isRefreshing = true
+        defer { isRefreshing = false }
         lastError = nil
         var failed = false
         var succeeded = false
-        var notifications: [(String, String)] = []
+        var pendingAlerts: [PendingAlert] = []
         let service = service
-        await withTaskGroup(of: (String, Quote?).self) { group in
-            for asset in assets {
+        let refreshAssets = assets
+        await withTaskGroup(of: (Asset, Quote?).self) { group in
+            var iterator = refreshAssets.makeIterator()
+            for _ in 0..<min(Self.maximumConcurrentRequests, refreshAssets.count) {
+                guard let asset = iterator.next() else { break }
                 group.addTask {
-                    do { return (asset.symbol, try await service.fetchQuote(for: asset)) } catch {
-                        return (asset.symbol, nil)
+                    do { return (asset, try await service.fetchQuote(for: asset)) } catch {
+                        return (asset, nil)
                     }
                 }
             }
-            for await (symbol, quote) in group {
-                guard let asset = assets.first(where: { $0.symbol == symbol }) else { continue }
-                if let quote, isValidLiveQuote(quote, for: asset) {
-                    quotes[symbol] = quote
+            while let (asset, quote) = await group.next() {
+                if let nextAsset = iterator.next() {
+                    group.addTask {
+                        do { return (nextAsset, try await service.fetchQuote(for: nextAsset)) } catch {
+                            return (nextAsset, nil)
+                        }
+                    }
+                }
+                guard assets.contains(asset) else { continue }
+                if let quote, isValidProviderQuote(quote, for: asset) {
+                    quotes[asset.symbol] = quote
                     succeeded = true
-                    notifications.append(contentsOf: evaluateAlerts(for: quote, at: now()))
+                    pendingAlerts.append(contentsOf: evaluateAlerts(for: quote, at: now()))
                 } else {
-                    if let previous = quotes[symbol] { quotes[symbol] = previous.markingStale() }
+                    if let previous = quotes[asset.symbol] {
+                        quotes[asset.symbol] = previous.markingStale()
+                    }
                     failed = true
                 }
             }
         }
-        isRefreshing = false
         if succeeded { lastRefresh = now() }
         if failed { lastError = "部分行情暂时不可用，已将上次数据标记为过期" }
-        if !notifications.isEmpty, !notificationAuthorizationRequested {
-            notificationAuthorizationRequested = true
-            await notificationService.requestAuthorization()
-        }
-        for (title, body) in notifications {
-            await notificationService.send(title: title, body: body)
-        }
+        await deliverAlerts(pendingAlerts)
     }
 
     @discardableResult
@@ -162,6 +199,10 @@ final class MarketStore: ObservableObject {
         }
         guard !assets.contains(asset) else {
             addError = "该行情已在列表中"
+            return false
+        }
+        guard assets.count < Self.maximumAssets else {
+            addError = "最多添加 \(Self.maximumAssets) 个行情"
             return false
         }
 
@@ -176,7 +217,7 @@ final class MarketStore: ObservableObject {
             addError = "无法验证该代码，请检查代码或稍后重试"
             return false
         }
-        guard isValidLiveQuote(quote, for: asset) else {
+        guard isValidProviderQuote(quote, for: asset) else {
             addError = "行情服务未返回有效数据"
             return false
         }
@@ -207,13 +248,24 @@ final class MarketStore: ObservableObject {
         condition: AlertRule.Condition,
         threshold: Double,
         cooldown: TimeInterval
-    ) -> Bool {
-        guard assets.contains(asset), threshold.isFinite, cooldown.isFinite, cooldown >= 0 else { return false }
+    ) async -> Bool {
+        guard assets.contains(asset), threshold.isFinite, cooldown.isFinite, cooldown >= 0 else {
+            alertRuleError = "提醒参数无效"
+            return false
+        }
+        guard alertRules.count < Self.maximumAlertRules else {
+            alertRuleError = "最多添加 \(Self.maximumAlertRules) 条提醒"
+            return false
+        }
         guard
             !alertRules.contains(where: {
                 $0.assetSymbol == asset.symbol && $0.condition == condition && $0.threshold == threshold
             })
-        else { return false }
+        else {
+            alertRuleError = "相同提醒已存在"
+            return false
+        }
+        alertRuleError = nil
         alertRules.append(
             AlertRule(
                 assetSymbol: asset.symbol,
@@ -221,7 +273,12 @@ final class MarketStore: ObservableObject {
                 threshold: threshold,
                 cooldown: cooldown))
         persist()
+        await updateNotificationAuthorization(requestIfNeeded: true)
         return true
+    }
+
+    func refreshNotificationAuthorization() async {
+        await updateNotificationAuthorization(requestIfNeeded: false)
     }
 
     func removeAlertRule(_ rule: AlertRule) {
@@ -241,11 +298,16 @@ final class MarketStore: ObservableObject {
         persist()
     }
 
-    func setQuietHours(enabled: Bool, startMinute: Int, endMinute: Int) {
+    @discardableResult
+    func setQuietHours(enabled: Bool, startMinute: Int, endMinute: Int) -> Bool {
+        guard (0..<1_440).contains(startMinute), (0..<1_440).contains(endMinute),
+            !enabled || startMinute != endMinute
+        else { return false }
         quietHoursEnabled = enabled
-        quietHoursStartMinute = min(max(startMinute, 0), 1_439)
-        quietHoursEndMinute = min(max(endMinute, 0), 1_439)
+        quietHoursStartMinute = startMinute
+        quietHoursEndMinute = endMinute
         persist()
+        return true
     }
 
     func isInQuietHours(at date: Date) -> Bool {
@@ -269,8 +331,8 @@ final class MarketStore: ObservableObject {
         defaults.set(quietHoursEndMinute, forKey: Self.quietHoursEndDefaultsKey)
     }
 
-    private func evaluateAlerts(for quote: Quote, at date: Date) -> [(String, String)] {
-        var notifications: [(String, String)] = []
+    private func evaluateAlerts(for quote: Quote, at date: Date) -> [PendingAlert] {
+        var pendingAlerts: [PendingAlert] = []
         var didChange = false
         for index in alertRules.indices where alertRules[index].assetSymbol == quote.symbol {
             let evaluation = AlertEvaluator.evaluate(
@@ -279,7 +341,7 @@ final class MarketStore: ObservableObject {
                 now: date,
                 monitoringPaused: monitoringPaused,
                 inQuietHours: isInQuietHours(at: date))
-            if evaluation.rule != alertRules[index] {
+            if !evaluation.shouldTrigger, evaluation.rule != alertRules[index] {
                 alertRules[index] = evaluation.rule
                 didChange = true
             }
@@ -289,20 +351,75 @@ final class MarketStore: ObservableObject {
                     evaluation.rule.condition.isPercentage
                     ? MarketFormatters.percent(quote.changePercent)
                     : MarketFormatters.price(quote.price, kind: quote.kind)
-                notifications.append(("\(assetName) 提醒", "\(evaluation.rule.condition.title) \(value)"))
+                pendingAlerts.append(
+                    PendingAlert(
+                        ruleID: evaluation.rule.id,
+                        triggeredRule: evaluation.rule,
+                        title: "\(assetName) 提醒",
+                        body: "\(evaluation.rule.condition.title) \(value)"))
             }
         }
         if didChange { persist() }
-        return notifications
+        return pendingAlerts
     }
 
-    private func isValidLiveQuote(_ quote: Quote, for asset: Asset) -> Bool {
+    private func deliverAlerts(_ pendingAlerts: [PendingAlert]) async {
+        guard !pendingAlerts.isEmpty else { return }
+        let status = await updateNotificationAuthorization(requestIfNeeded: true)
+        guard status == .authorized else { return }
+
+        var didChange = false
+        for pendingAlert in pendingAlerts {
+            do {
+                try await notificationService.send(title: pendingAlert.title, body: pendingAlert.body)
+                guard let index = alertRules.firstIndex(where: { $0.id == pendingAlert.ruleID }) else { continue }
+                alertRules[index].lastTriggeredAt = pendingAlert.triggeredRule.lastTriggeredAt
+                alertRules[index].lastTriggeredPrice = pendingAlert.triggeredRule.lastTriggeredPrice
+                alertRules[index].isActive = alertRules[index].isEnabled
+                didChange = true
+            } catch {
+                notificationError = "通知发送失败，将在下次行情刷新时重试"
+            }
+        }
+        if didChange { persist() }
+    }
+
+    @discardableResult
+    private func updateNotificationAuthorization(
+        requestIfNeeded: Bool
+    ) async -> AlertNotificationAuthorizationStatus {
+        var status = await notificationService.authorizationStatus()
+        if requestIfNeeded, status == .notDetermined {
+            do {
+                status = try await notificationService.requestAuthorization()
+            } catch {
+                notificationAuthorization = status
+                notificationError = "请求通知权限失败，请稍后重试"
+                return status
+            }
+        }
+        notificationAuthorization = status
+        switch status {
+        case .authorized:
+            notificationError = nil
+        case .denied:
+            notificationError = "通知权限未开启，请在系统设置中允许 MarketMonitor 通知"
+        case .notDetermined:
+            notificationError = "尚未获得通知权限，价格提醒暂时不会触发"
+        case .unknown:
+            notificationError = nil
+        }
+        return status
+    }
+
+    private func isValidProviderQuote(_ quote: Quote, for asset: Asset) -> Bool {
         quote.symbol == asset.symbol
             && quote.kind == asset.kind
             && quote.price.isFinite
             && quote.price > 0
             && quote.change.isFinite
             && quote.changePercent.isFinite
+            && quote.delayMinutes >= 0
             && !quote.isDemo
             && !quote.isStale
     }

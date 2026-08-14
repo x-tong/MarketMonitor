@@ -18,7 +18,7 @@ enum AlertEvaluator {
             nextRule.isActive = false
             return AlertEvaluation(rule: nextRule, shouldTrigger: false)
         }
-        guard isUsableQuote(quote), quote.symbol == rule.assetSymbol else {
+        guard isUsableQuote(quote, at: now), quote.symbol == rule.assetSymbol else {
             return AlertEvaluation(rule: rule, shouldTrigger: false)
         }
         guard matches(rule.condition, quote: quote, threshold: rule.threshold) else {
@@ -40,8 +40,8 @@ enum AlertEvaluator {
         return AlertEvaluation(rule: nextRule, shouldTrigger: true)
     }
 
-    private static func isUsableQuote(_ quote: Quote) -> Bool {
-        !quote.isDemo && !quote.isStale && quote.price.isFinite && quote.price > 0
+    private static func isUsableQuote(_ quote: Quote, at now: Date) -> Bool {
+        quote.isAlertEligible(at: now) && quote.price.isFinite && quote.price > 0
             && quote.change.isFinite && quote.changePercent.isFinite
     }
 

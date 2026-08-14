@@ -9,14 +9,20 @@ struct MarketPopoverView: View {
     @State private var alertCooldownMinutes = "60"
     @State private var quietStart = "22:00"
     @State private var quietEnd = "07:00"
+    @State private var quietHoursError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            quoteList
-            Divider()
-            alertsSection
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    quoteList
+                    Divider()
+                    alertsSection
+                }
+            }
+            .frame(height: scrollingContentHeight)
             Divider()
             addRow
             footer
@@ -71,16 +77,27 @@ struct MarketPopoverView: View {
     }
 
     private var quoteList: some View {
-        VStack(spacing: 0) {
-            ForEach(store.assets) { asset in
-                QuoteRow(asset: asset, quote: store.quotes[asset.symbol]) {
-                    store.remove(asset)
-                } onSetPrimary: {
-                    store.setPrimary(asset)
-                } isPrimary: {
-                    store.isPrimary(asset)
+        LazyVStack(spacing: 0) {
+            if store.assets.isEmpty {
+                Text("暂无行情")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 56)
+            } else {
+                ForEach(store.assets) { asset in
+                    QuoteRow(
+                        asset: asset,
+                        quote: store.quotes[asset.symbol],
+                        displayDate: store.displayDate
+                    ) {
+                        store.remove(asset)
+                    } onSetPrimary: {
+                        store.setPrimary(asset)
+                    } isPrimary: {
+                        store.isPrimary(asset)
+                    }
+                    if asset.id != store.assets.last?.id { Divider().padding(.leading, 62) }
                 }
-                if asset.id != store.assets.last?.id { Divider().padding(.leading, 62) }
             }
         }
         .padding(.vertical, 4)
@@ -140,8 +157,20 @@ struct MarketPopoverView: View {
                     .font(.caption2)
                     .foregroundStyle(.orange)
             }
+            if let error = store.notificationError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let error = store.alertRuleError {
+                Label(error, systemImage: "exclamationmark.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !store.alertRules.isEmpty {
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0) {
                     ForEach(store.alertRules) { rule in
                         alertRuleRow(rule)
                         if rule.id != store.alertRules.last?.id { Divider().padding(.leading, 28) }
@@ -155,6 +184,12 @@ struct MarketPopoverView: View {
         .padding(.vertical, 12)
         .task {
             if alertAssetSymbol.isEmpty { alertAssetSymbol = store.assets.first?.symbol ?? "" }
+            await store.refreshNotificationAuthorization()
+        }
+        .onChange(of: store.assets) { assets in
+            if !assets.contains(where: { $0.symbol == alertAssetSymbol }) {
+                alertAssetSymbol = assets.first?.symbol ?? ""
+            }
         }
     }
 
@@ -172,7 +207,7 @@ struct MarketPopoverView: View {
                 Text("\(displaySymbol(for: rule.assetSymbol)) · \(rule.condition.title) \(thresholdText(for: rule))")
                     .font(.caption)
                     .lineLimit(1)
-                Text(lastTriggerText(for: rule))
+                Text("\(lastTriggerText(for: rule)) · \(cooldownText(rule.cooldown))")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -208,6 +243,7 @@ struct MarketPopoverView: View {
                     .frame(minWidth: 48, alignment: .leading)
             }
             .menuStyle(.borderlessButton)
+            .disabled(store.assets.isEmpty)
             Menu {
                 ForEach(AlertRule.Condition.allCases, id: \.self) { condition in
                     Button {
@@ -243,31 +279,38 @@ struct MarketPopoverView: View {
     }
 
     private var quietHoursRow: some View {
-        HStack(spacing: 6) {
-            Toggle(
-                "静默时段",
-                isOn: Binding(
-                    get: { store.quietHoursEnabled },
-                    set: { updateQuietHours(enabled: $0) })
-            )
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            Spacer()
-            TextField("22:00", text: $quietStart)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 54)
-            Text("-")
-                .foregroundStyle(.secondary)
-            TextField("07:00", text: $quietEnd)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 54)
-            Button {
-                updateQuietHours(enabled: store.quietHoursEnabled)
-            } label: {
-                Image(systemName: "checkmark")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Toggle(
+                    "静默时段",
+                    isOn: Binding(
+                        get: { store.quietHoursEnabled },
+                        set: { updateQuietHours(enabled: $0) })
+                )
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                Spacer()
+                TextField("22:00", text: $quietStart)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 54)
+                Text("-")
+                    .foregroundStyle(.secondary)
+                TextField("07:00", text: $quietEnd)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 54)
+                Button {
+                    updateQuietHours(enabled: store.quietHoursEnabled)
+                } label: {
+                    Image(systemName: "checkmark")
+                }
+                .buttonStyle(.borderless)
+                .help("保存静默时段")
             }
-            .buttonStyle(.borderless)
-            .help("保存静默时段")
+            if let quietHoursError {
+                Text(quietHoursError)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
         }
         .font(.caption)
         .onAppear {
@@ -310,21 +353,40 @@ struct MarketPopoverView: View {
         guard let threshold = Double(alertThreshold), let cooldown = Double(alertCooldownMinutes),
             let asset = store.assets.first(where: { $0.symbol == alertAssetSymbol })
         else { return }
-        if store.addAlertRule(
-            asset: asset,
-            condition: alertCondition,
-            threshold: threshold,
-            cooldown: cooldown * 60)
-        {
-            alertThreshold = ""
+        Task {
+            if await store.addAlertRule(
+                asset: asset,
+                condition: alertCondition,
+                threshold: threshold,
+                cooldown: cooldown * 60)
+            {
+                alertThreshold = ""
+            }
         }
     }
 
     private func updateQuietHours(enabled: Bool) {
+        if !enabled {
+            quietHoursError = nil
+            store.setQuietHours(
+                enabled: false,
+                startMinute: store.quietHoursStartMinute,
+                endMinute: store.quietHoursEndMinute)
+            return
+        }
+        guard let startMinute = parseMinute(quietStart), let endMinute = parseMinute(quietEnd) else {
+            quietHoursError = "请使用 HH:mm 格式输入有效时间"
+            return
+        }
+        guard startMinute != endMinute else {
+            quietHoursError = "开始和结束时间不能相同"
+            return
+        }
+        quietHoursError = nil
         store.setQuietHours(
-            enabled: enabled,
-            startMinute: parseMinute(quietStart) ?? store.quietHoursStartMinute,
-            endMinute: parseMinute(quietEnd) ?? store.quietHoursEndMinute)
+            enabled: true,
+            startMinute: startMinute,
+            endMinute: endMinute)
     }
 
     private func displaySymbol(for symbol: String) -> String {
@@ -346,6 +408,14 @@ struct MarketPopoverView: View {
             "上次 \(MarketFormatters.price(price, kind: asset.kind)) · \(date.formatted(date: .omitted, time: .shortened))"
     }
 
+    private func cooldownText(_ interval: TimeInterval) -> String {
+        if interval == 0 { return "无冷却" }
+        if interval.truncatingRemainder(dividingBy: 3_600) == 0 {
+            return "冷却 \(Int(interval / 3_600)) 小时"
+        }
+        return "冷却 \(Int(interval / 60)) 分钟"
+    }
+
     private func minuteText(_ minute: Int) -> String {
         String(format: "%02d:%02d", minute / 60, minute % 60)
     }
@@ -359,13 +429,21 @@ struct MarketPopoverView: View {
     }
 
     private var primaryDisplaySymbol: String {
-        store.assets.first(where: { $0.symbol == store.primarySymbol })?.displaySymbol ?? store.primarySymbol
+        store.assets.first(where: { $0.symbol == store.primarySymbol })?.displaySymbol
+            ?? (store.primarySymbol.isEmpty ? "未选择" : store.primarySymbol)
+    }
+
+    private var scrollingContentHeight: CGFloat {
+        let quoteHeight = store.assets.isEmpty ? 64 : CGFloat(store.assets.count * 55 + 8)
+        let alertHeight = CGFloat(store.alertRules.count * 42 + 154)
+        return min(max(quoteHeight + alertHeight, 250), 460)
     }
 }
 
 private struct QuoteRow: View {
     let asset: Asset
     let quote: Quote?
+    let displayDate: Date
     let onRemove: () -> Void
     let onSetPrimary: () -> Void
     let isPrimary: () -> Bool
@@ -389,18 +467,7 @@ private struct QuoteRow: View {
             }
             Spacer(minLength: 4)
             if let quote {
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(MarketFormatters.price(quote.price, kind: quote.kind))
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    Text(
-                        "\(MarketFormatters.signed(quote.change, kind: quote.kind))  \(MarketFormatters.percent(quote.changePercent))"
-                    )
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(quote.isPositive ? .green : .red)
-                    Text(statusText(for: quote))
-                        .font(.system(size: 9))
-                        .foregroundStyle(statusColor(for: quote))
-                }
+                quoteDetails(for: quote, at: displayDate)
             } else {
                 ProgressView().controlSize(.small)
             }
@@ -427,15 +494,18 @@ private struct QuoteRow: View {
         }
     }
 
-    private func statusText(for quote: Quote) -> String {
-        let time = quote.updatedAt.formatted(date: .omitted, time: .shortened)
-        if quote.isDemo && quote.isStale { return "模拟 · 已过期 · \(time)" }
-        if quote.isDemo { return "模拟 · \(time)" }
-        if quote.isStale { return "已过期 · \(time)" }
-        return "更新于 \(time)"
-    }
-
-    private func statusColor(for quote: Quote) -> Color {
-        quote.isDemo || quote.isStale ? .orange : .secondary
+    private func quoteDetails(for quote: Quote, at date: Date) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(MarketFormatters.price(quote.price, kind: quote.kind))
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+            Text(
+                "\(MarketFormatters.signed(quote.change, kind: quote.kind))  \(MarketFormatters.percent(quote.changePercent))"
+            )
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .foregroundStyle(quote.isPositive ? .green : .red)
+            Text(QuoteStatusFormatter.detailText(for: quote, at: date))
+                .font(.system(size: 9))
+                .foregroundStyle(quote.isAlertEligible(at: date) ? Color.secondary : Color.orange)
+        }
     }
 }

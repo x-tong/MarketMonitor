@@ -30,4 +30,11 @@ struct AssetTests {
     func rejectsBlankInput() {
         #expect(Asset.from(symbol: "   \n") == nil)
     }
+
+    @Test("Rejects symbols beyond the resource limit")
+    func rejectsOversizedSymbol() {
+        let symbol = String(repeating: "A", count: Asset.maximumSymbolLength + 1)
+
+        #expect(Asset.from(symbol: symbol) == nil)
+    }
 }

@@ -42,7 +42,7 @@ macOS may show a security warning the first time the app is opened.
 
 The app is menu-bar-only and will not appear in the Dock. The current release requires
 an Apple Silicon Mac running macOS 13 or newer and internet access for live quotes. The
-first alert trigger asks for notification permission.
+creating the first alert rule asks for notification permission.
 
 Maintainers can build the same artifacts locally with:
 
@@ -85,12 +85,17 @@ Six-digit mainland codes are inferred from their leading digit. Use an explicit 
 
 - A-share and Hong Kong quotes prefer Tencent's public quote endpoint and fall back to Yahoo Finance.
 - US stock and cryptocurrency quotes use Yahoo Finance.
-- Quotes refresh every 30 seconds. This is polling, not an exchange-grade real-time feed.
-- Demo and stale quotes are labeled in both the menu bar and quote list. A failed refresh preserves the
-  previous quote and timestamp, and marks that quote as stale.
-- New symbols are saved only after a market-data provider returns a valid live quote.
+- Quotes refresh every 30 seconds, and each provider request times out after 10 seconds. This is polling, not an exchange-grade real-time feed.
+- To keep polling and menu rendering bounded, a watchlist can contain up to 50 assets and the app stores up to 200 alert rules. At most six quote requests run concurrently.
+- Provider timestamps are preserved. Trading, pre-market, post-market, closed, delayed, unknown, demo, and stale
+  states are labeled in the menu bar or quote list when the provider exposes enough information. A failed refresh
+  preserves the previous quote and timestamp, and marks that quote as stale.
+- New symbols are saved only after a market-data provider returns a structurally valid quote, including when the
+  market is closed.
 - Price and percentage alerts support per-rule cooldowns, condition re-arming, quiet hours, and a persisted global pause.
-  Notifications are emitted only from validated, non-demo, non-stale quotes after macOS notification permission is granted.
+  Notifications are emitted only from current, non-delayed trading-session quotes after macOS notification
+  permission is granted. Denied permission, authorization errors, or delivery failure do not consume a trigger;
+  the rule remains ready to retry on a later refresh.
 
 This project is currently an alpha suitable for local evaluation and informal release testing. The public endpoints can rate-limit or change without notice. Release artifacts are ad-hoc signed and not notarized.
 

@@ -1,16 +1,15 @@
 import Foundation
 
 enum MarketFormatters {
-    static let price: NumberFormatter = {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = 2
-        formatter.maximumFractionDigits = 2
-        return formatter
-    }()
-
     static func price(_ value: Double, kind: Asset.AssetKind) -> String {
-        let digits = kind == .crypto && value >= 1_000 ? 0 : (kind == .crypto ? 2 : 2)
+        let digits: Int
+        switch (kind, abs(value)) {
+        case (.crypto, 1_000...): digits = 0
+        case (.crypto, 1...): digits = 2
+        case (.crypto, 0.01...): digits = 4
+        case (.crypto, 0...): digits = 8
+        default: digits = 2
+        }
         return value.formatted(.number.precision(.fractionLength(digits)))
     }
 

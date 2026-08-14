@@ -1,6 +1,9 @@
 import Foundation
 
 struct Asset: Identifiable, Codable, Hashable, Sendable {
+    static let maximumSymbolLength = 32
+    static let maximumDisplayNameLength = 100
+
     let symbol: String
     let displayName: String
     let kind: AssetKind
@@ -28,7 +31,7 @@ struct Asset: Identifiable, Codable, Hashable, Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .uppercased()
             .replacingOccurrences(of: " ", with: "")
-        guard !input.isEmpty else { return nil }
+        guard !input.isEmpty, input.count <= maximumSymbolLength else { return nil }
 
         let normalized = normalizedSymbol(from: input)
         let isCrypto = normalized.hasSuffix("-USD")
@@ -96,5 +99,13 @@ struct Asset: Identifiable, Codable, Hashable, Sendable {
 
     private static func isDigits(_ value: String) -> Bool {
         !value.isEmpty && value.allSatisfy(\.isNumber)
+    }
+
+    var isValidPersistedAsset: Bool {
+        !symbol.isEmpty
+            && symbol.count <= Self.maximumSymbolLength
+            && !displayName.isEmpty
+            && displayName.count <= Self.maximumDisplayNameLength
+            && Asset.from(symbol: symbol)?.symbol == symbol
     }
 }

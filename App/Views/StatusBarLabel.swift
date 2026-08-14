@@ -4,6 +4,11 @@ struct StatusBarLabel: View {
     @EnvironmentObject private var store: MarketStore
 
     var body: some View {
+        label(at: store.displayDate)
+            .help("打开行情监控")
+    }
+
+    private func label(at date: Date) -> some View {
         HStack(spacing: 5) {
             Image(systemName: "chart.line.uptrend.xyaxis")
             if let quote = store.primaryQuote {
@@ -14,8 +19,8 @@ struct StatusBarLabel: View {
                 Image(systemName: quote.isPositive ? "arrow.up.right" : "arrow.down.right")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(quote.isPositive ? .green : .red)
-                if quote.isDemo || quote.isStale {
-                    Text(statusText(for: quote))
+                if !quote.isAlertEligible(at: date) {
+                    Text(QuoteStatusFormatter.shortText(for: quote, at: date))
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(.orange)
                 }
@@ -24,11 +29,5 @@ struct StatusBarLabel: View {
                     .font(.system(size: 12, weight: .semibold))
             }
         }
-        .help("打开行情监控")
-    }
-
-    private func statusText(for quote: Quote) -> String {
-        if quote.isDemo && quote.isStale { return "模拟/过期" }
-        return quote.isDemo ? "模拟" : "过期"
     }
 }
