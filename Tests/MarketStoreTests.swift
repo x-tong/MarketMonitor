@@ -61,7 +61,7 @@ struct MarketStoreTests {
             defaults: try makeDefaults(),
             refreshInterval: .seconds(60),
             startsAutomaticRefresh: true)
-        weak let weakStore = store
+        let weakStore = WeakReference(store)
         let expectedRequests = try #require(store?.assets.count)
 
         await provider.waitForRequestCount(expectedRequests)
@@ -69,11 +69,11 @@ struct MarketStoreTests {
             await Task.yield()
         }
         store = nil
-        for _ in 0..<20 where weakStore != nil {
+        for _ in 0..<20 where weakStore.value != nil {
             await Task.yield()
         }
 
-        #expect(weakStore == nil)
+        #expect(weakStore.value == nil)
     }
 
     @Test("Watchlist size and refresh concurrency stay bounded")
@@ -336,6 +336,14 @@ struct MarketStoreTests {
     private func makeDefaults() throws -> UserDefaults {
         let suiteName = "MarketStoreTests.\(UUID().uuidString)"
         return try #require(UserDefaults(suiteName: suiteName))
+    }
+}
+
+private final class WeakReference<Object: AnyObject> {
+    weak var value: Object?
+
+    init(_ value: Object?) {
+        self.value = value
     }
 }
 
