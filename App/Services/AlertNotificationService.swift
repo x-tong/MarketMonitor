@@ -18,7 +18,11 @@ final class UserNotificationService: AlertNotificationSending {
     }
 
     func requestAuthorization() async {
-        _ = try? await center.requestAuthorization(options: [.alert, .sound])
+        await withCheckedContinuation { continuation in
+            center.requestAuthorization(options: [.alert, .sound]) { _, _ in
+                continuation.resume()
+            }
+        }
     }
 
     func send(title: String, body: String) async {
@@ -30,6 +34,10 @@ final class UserNotificationService: AlertNotificationSending {
             identifier: UUID().uuidString,
             content: content,
             trigger: nil)
-        try? await center.add(request)
+        await withCheckedContinuation { continuation in
+            center.add(request) { _ in
+                continuation.resume()
+            }
+        }
     }
 }
