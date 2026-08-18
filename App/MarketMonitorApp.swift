@@ -1,9 +1,7 @@
-import AppKit
 import SwiftUI
 
 @main
 struct MarketMonitorApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = MarketStore()
 
     var body: some Scene {
@@ -16,11 +14,5 @@ struct MarketMonitorApp: App {
                 .environmentObject(store)
         }
         .menuBarExtraStyle(.window)
-    }
-}
-
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
     }
 }

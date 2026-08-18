@@ -83,6 +83,7 @@ cat > "$INFO_PLIST" <<PLIST
   <key>CFBundleName</key><string>$APP_NAME</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>$MIN_SYSTEM_VERSION</string>
+  <key>LSUIElement</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict>
 </plist>
